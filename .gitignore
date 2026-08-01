@@ -1,0 +1,15 @@
+# Python / Environment
+__pycache__/
+*.py[cod]
+*$py.class
+.venv/
+venv/
+ENV/
+.env
+
+# Testing / IDEs
+.pytest_cache/
+.coverage
+.vscode/
+.idea/
+*.log
