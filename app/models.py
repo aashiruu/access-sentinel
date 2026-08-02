@@ -15,6 +15,7 @@ class Role(str, Enum):
 class AccessStatus(str, Enum):
     GRANTED = "granted"
     DENIED = "denied"
+    BREAK_GLASS = "break_glass_granted"
 
 
 class AuditEntry(BaseModel):
@@ -25,6 +26,8 @@ class AuditEntry(BaseModel):
     patient_id: str
     action: str
     status: AccessStatus
+    is_break_glass: bool = False
+    break_glass_reason: Optional[str] = None
     reason: Optional[str] = None
     prev_hash: str
     hash: str
@@ -38,6 +41,8 @@ class AuditEntry(BaseModel):
             "patient_id": self.patient_id,
             "action": self.action,
             "status": self.status.value,
+            "is_break_glass": self.is_break_glass,
+            "break_glass_reason": self.break_glass_reason,
             "reason": self.reason,
             "prev_hash": self.prev_hash,
         }

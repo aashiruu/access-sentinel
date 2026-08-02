@@ -15,6 +15,8 @@ class ImmutableAuditStore:
         patient_id: str,
         action: str,
         status: AccessStatus,
+        is_break_glass: bool = False,
+        break_glass_reason: str | None = None,
         reason: str | None = None,
     ) -> AuditEntry:
         prev_hash = self._logs[-1].hash if self._logs else self._genesis_hash
@@ -29,6 +31,8 @@ class ImmutableAuditStore:
             patient_id=patient_id,
             action=action,
             status=status,
+            is_break_glass=is_break_glass,
+            break_glass_reason=break_glass_reason,
             reason=reason,
             prev_hash=prev_hash,
             hash="",
@@ -38,11 +42,9 @@ class ImmutableAuditStore:
         return entry
 
     def get_logs(self) -> List[AuditEntry]:
-        # Return copies to preserve in-memory immutability
         return [log.model_copy() for log in self._logs]
 
     def verify_integrity(self) -> bool:
-        """Verifies hash-chain continuity across all stored logs."""
         prev_hash = self._genesis_hash
         for entry in self._logs:
             if entry.prev_hash != prev_hash:
@@ -51,12 +53,6 @@ class ImmutableAuditStore:
                 return False
             prev_hash = entry.hash
         return True
-
-    def attempt_tamper(self, index: int, new_user_id: str) -> None:
-        """Helper method simulating direct unauthorized modification attempt on internal storage."""
-        if 0 <= index < len(self._logs):
-            # Direct modification breaks hash signature verification
-            self._logs[index].user_id = new_user_id
 
 
 audit_store = ImmutableAuditStore()

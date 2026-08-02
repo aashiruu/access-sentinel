@@ -1,7 +1,11 @@
+import logging
 from typing import Annotated
 from fastapi import FastAPI, Header, HTTPException, Depends, status
 from app.models import Role, PatientRecord, AccessStatus, MOCK_PATIENTS_DB
 from app.audit import audit_store
+
+logging.basicConfig(level=logging.INFO)
+logger = logging.getLogger("access-sentinel")
 
 app = FastAPI(
     title="access-sentinel",
@@ -40,6 +44,8 @@ async def health_check() -> dict[str, str]:
 async def get_patient_record(
     patient_id: str,
     current_user: Annotated[tuple[str, Role], Depends(get_current_user)],
+    x_break_glass: Annotated[bool | None, Header()] = False,
+    x_break_glass_reason: Annotated[str | None, Header()] = None,
 ):
     user_id, role = current_user
 
@@ -56,6 +62,50 @@ async def get_patient_record(
 
     raw_patient = MOCK_PATIENTS_DB[patient_id]
 
+    # Break-glass evaluation logic
+    if x_break_glass:
+        # Non-clinical roles (like billing or admin) cannot break-glass to view clinical data
+        if role in [Role.ADMIN, Role.BILLING]:
+            audit_store.log_access(
+                user_id=user_id,
+                role=role,
+                patient_id=patient_id,
+                action="GET_PATIENT_BREAK_GLASS",
+                status=AccessStatus.DENIED,
+                is_break_glass=True,
+                break_glass_reason=x_break_glass_reason,
+                reason=f"Role '{role.value}' is unauthorized to invoke break-glass clinical overrides.",
+            )
+            raise HTTPException(
+                status_code=status.HTTP_403_FORBIDDEN,
+                detail="Forbidden: Break-glass override permitted only for clinical personnel.",
+            )
+
+        if not x_break_glass_reason or len(x_break_glass_reason.strip()) < 5:
+            raise HTTPException(
+                status_code=status.HTTP_400_BAD_REQUEST,
+                detail="Break-glass access requires a valid justification (X-Break-Glass-Reason header).",
+            )
+
+        # Log emergency override with high-priority log alert
+        logger.warning(
+            f"EMERGENCY BREAK-GLASS INVOCATION: User {user_id} ({role.value}) accessed Patient {patient_id}. Reason: {x_break_glass_reason}"
+        )
+
+        audit_store.log_access(
+            user_id=user_id,
+            role=role,
+            patient_id=patient_id,
+            action="GET_PATIENT_BREAK_GLASS",
+            status=AccessStatus.BREAK_GLASS,
+            is_break_glass=True,
+            break_glass_reason=x_break_glass_reason,
+        )
+
+        # Return full record on emergency override
+        return raw_patient
+
+    # Standard RBAC Evaluation
     if role == Role.ADMIN:
         audit_store.log_access(
             user_id=user_id,
@@ -70,7 +120,6 @@ async def get_patient_record(
             detail="Forbidden: Administrative roles cannot directly inspect patient health/billing data.",
         )
 
-    # Granted Access Log
     audit_store.log_access(
         user_id=user_id,
         role=role,
@@ -115,7 +164,6 @@ async def get_audit_logs(
 
 @app.delete("/audit/logs")
 async def delete_audit_logs():
-    """Explicitly blocked endpoint demonstrating immutability specification."""
     raise HTTPException(
         status_code=status.HTTP_405_METHOD_NOT_ALLOWED,
         detail="Immutable store violation: Deletion or modification of audit logs is permanently prohibited.",
