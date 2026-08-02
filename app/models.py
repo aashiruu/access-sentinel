@@ -1,6 +1,8 @@
+import hashlib
+import json
 from enum import Enum
 from typing import Optional
-from pydantic import BaseModel, Field
+from pydantic import BaseModel
 
 
 class Role(str, Enum):
@@ -8,6 +10,39 @@ class Role(str, Enum):
     NURSE = "nurse"
     BILLING = "billing"
     ADMIN = "admin"
+
+
+class AccessStatus(str, Enum):
+    GRANTED = "granted"
+    DENIED = "denied"
+
+
+class AuditEntry(BaseModel):
+    id: int
+    timestamp: str
+    user_id: str
+    role: Role
+    patient_id: str
+    action: str
+    status: AccessStatus
+    reason: Optional[str] = None
+    prev_hash: str
+    hash: str
+
+    def calculate_hash(self) -> str:
+        payload = {
+            "id": self.id,
+            "timestamp": self.timestamp,
+            "user_id": self.user_id,
+            "role": self.role.value,
+            "patient_id": self.patient_id,
+            "action": self.action,
+            "status": self.status.value,
+            "reason": self.reason,
+            "prev_hash": self.prev_hash,
+        }
+        serialized = json.dumps(payload, sort_keys=True)
+        return hashlib.sha256(serialized.encode()).hexdigest()
 
 
 class ClinicalRecord(BaseModel):
@@ -30,7 +65,6 @@ class PatientRecord(BaseModel):
     billing: Optional[BillingRecord] = None
 
 
-# Mock database store
 MOCK_PATIENTS_DB: dict[str, dict] = {
     "P100": {
         "patient_id": "P100",

@@ -1,6 +1,7 @@
 from typing import Annotated
 from fastapi import FastAPI, Header, HTTPException, Depends, status
-from app.models import Role, PatientRecord, ClinicalRecord, BillingRecord, MOCK_PATIENTS_DB
+from app.models import Role, PatientRecord, AccessStatus, MOCK_PATIENTS_DB
+from app.audit import audit_store
 
 app = FastAPI(
     title="access-sentinel",
@@ -43,18 +44,41 @@ async def get_patient_record(
     user_id, role = current_user
 
     if patient_id not in MOCK_PATIENTS_DB:
+        audit_store.log_access(
+            user_id=user_id,
+            role=role,
+            patient_id=patient_id,
+            action="GET_PATIENT",
+            status=AccessStatus.DENIED,
+            reason="Patient ID not found",
+        )
         raise HTTPException(status_code=404, detail="Patient record not found")
 
     raw_patient = MOCK_PATIENTS_DB[patient_id]
 
-    # Admins are prohibited from viewing raw medical/billing patient details
     if role == Role.ADMIN:
+        audit_store.log_access(
+            user_id=user_id,
+            role=role,
+            patient_id=patient_id,
+            action="GET_PATIENT",
+            status=AccessStatus.DENIED,
+            reason="Admin role forbidden from direct PHI read",
+        )
         raise HTTPException(
             status_code=status.HTTP_403_FORBIDDEN,
             detail="Forbidden: Administrative roles cannot directly inspect patient health/billing data.",
         )
 
-    # Construct response according to role scopes
+    # Granted Access Log
+    audit_store.log_access(
+        user_id=user_id,
+        role=role,
+        patient_id=patient_id,
+        action="GET_PATIENT",
+        status=AccessStatus.GRANTED,
+    )
+
     filtered_record = {
         "patient_id": raw_patient["patient_id"],
         "name": raw_patient["name"],
@@ -70,3 +94,29 @@ async def get_patient_record(
         filtered_record["billing"] = raw_patient["billing"]
 
     return filtered_record
+
+
+@app.get("/audit/logs")
+async def get_audit_logs(
+    current_user: Annotated[tuple[str, Role], Depends(get_current_user)],
+):
+    user_id, role = current_user
+    if role != Role.ADMIN:
+        raise HTTPException(
+            status_code=status.HTTP_403_FORBIDDEN,
+            detail="Forbidden: Only administrative roles can query the system audit log.",
+        )
+    return {
+        "integrity_verified": audit_store.verify_integrity(),
+        "total_entries": len(audit_store.get_logs()),
+        "logs": audit_store.get_logs(),
+    }
+
+
+@app.delete("/audit/logs")
+async def delete_audit_logs():
+    """Explicitly blocked endpoint demonstrating immutability specification."""
+    raise HTTPException(
+        status_code=status.HTTP_405_METHOD_NOT_ALLOWED,
+        detail="Immutable store violation: Deletion or modification of audit logs is permanently prohibited.",
+    )
