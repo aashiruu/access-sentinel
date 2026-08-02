@@ -1,8 +1,11 @@
 import logging
 from typing import Annotated
 from fastapi import FastAPI, Header, HTTPException, Depends, status, Response
+from prometheus_client import generate_latest, CONTENT_TYPE_LATEST
+
 from app.models import Role, PatientRecord, AccessStatus, MOCK_PATIENTS_DB
 from app.audit import audit_store, AuditStoreUnavailableException
+from app import metrics
 
 logging.basicConfig(level=logging.INFO)
 logger = logging.getLogger("access-sentinel")
@@ -19,6 +22,9 @@ async def get_current_user(
     x_user_role: Annotated[str | None, Header()] = None,
 ) -> tuple[str, Role]:
     if not x_user_id or not x_user_role:
+        metrics.UNAUTHORIZED_ACCESS_TOTAL.labels(
+            role="unknown", reason="missing_auth_headers"
+        ).inc()
         raise HTTPException(
             status_code=status.HTTP_401_UNAUTHORIZED,
             detail="Missing required authentication headers: X-User-Id and X-User-Role",
@@ -27,6 +33,9 @@ async def get_current_user(
     try:
         role = Role(x_user_role.lower())
     except ValueError:
+        metrics.UNAUTHORIZED_ACCESS_TOTAL.labels(
+            role="invalid", reason="invalid_role"
+        ).inc()
         raise HTTPException(
             status_code=status.HTTP_400_BAD_REQUEST,
             detail=f"Invalid role '{x_user_role}'. Valid roles are: {[r.value for r in Role]}",
@@ -35,14 +44,26 @@ async def get_current_user(
     return x_user_id, role
 
 
+def update_gauge_metrics():
+    metrics.AUDIT_STORE_HEALTHY.set(1 if audit_store.is_healthy else 0)
+    metrics.DEGRADED_BUFFERED_LOGS.set(len(audit_store.get_fallback_buffer()))
+
+
 @app.get("/health")
 async def health_check() -> dict[str, str | bool]:
+    update_gauge_metrics()
     return {
         "status": "ok" if audit_store.is_healthy else "degraded",
         "service": "access-sentinel",
         "audit_store_healthy": audit_store.is_healthy,
         "buffered_degraded_logs": len(audit_store.get_fallback_buffer()),
     }
+
+
+@app.get("/metrics")
+async def metrics_endpoint():
+    update_gauge_metrics()
+    return Response(content=generate_latest(), media_type=CONTENT_TYPE_LATEST)
 
 
 @app.get("/patients/{patient_id}", response_model=PatientRecord)
@@ -54,8 +75,12 @@ async def get_patient_record(
     x_break_glass_reason: Annotated[str | None, Header()] = None,
 ):
     user_id, role = current_user
+    update_gauge_metrics()
 
     if patient_id not in MOCK_PATIENTS_DB:
+        metrics.ACCESS_REQUESTS_TOTAL.labels(
+            role=role.value, status="404_not_found", action="GET_PATIENT", is_break_glass=str(x_break_glass)
+        ).inc()
         try:
             audit_store.log_access(
                 user_id=user_id,
@@ -74,6 +99,9 @@ async def get_patient_record(
     # Break-glass logic
     if x_break_glass:
         if role in [Role.ADMIN, Role.BILLING]:
+            metrics.UNAUTHORIZED_ACCESS_TOTAL.labels(
+                role=role.value, reason="unauthorized_break_glass_attempt"
+            ).inc()
             try:
                 audit_store.log_access(
                     user_id=user_id,
@@ -98,7 +126,12 @@ async def get_patient_record(
                 detail="Break-glass access requires a valid justification (X-Break-Glass-Reason header).",
             )
 
-        # Attempt audit logging with degraded fallback handling
+        # Record metrics for break-glass emergency invocation
+        metrics.BREAK_GLASS_TOTAL.labels(role=role.value, patient_id=patient_id).inc()
+        metrics.ACCESS_REQUESTS_TOTAL.labels(
+            role=role.value, status="break_glass_granted", action="GET_PATIENT", is_break_glass="True"
+        ).inc()
+
         try:
             audit_store.log_access(
                 user_id=user_id,
@@ -110,9 +143,7 @@ async def get_patient_record(
                 break_glass_reason=x_break_glass_reason,
             )
         except AuditStoreUnavailableException:
-            logger.warning(
-                f"AUDIT STORE OUTAGE - DEGRADED BREAK-GLASS: Buffering log for {user_id}"
-            )
+            logger.warning(f"AUDIT STORE OUTAGE - DEGRADED BREAK-GLASS for {user_id}")
             audit_store.log_access(
                 user_id=user_id,
                 role=role,
@@ -125,10 +156,17 @@ async def get_patient_record(
             )
             response.headers["X-System-Degraded"] = "true"
 
+        update_gauge_metrics()
         return raw_patient
 
     # Standard RBAC Evaluation
     if role == Role.ADMIN:
+        metrics.UNAUTHORIZED_ACCESS_TOTAL.labels(
+            role=role.value, reason="admin_phi_read_blocked"
+        ).inc()
+        metrics.ACCESS_REQUESTS_TOTAL.labels(
+            role=role.value, status="forbidden", action="GET_PATIENT", is_break_glass="False"
+        ).inc()
         try:
             audit_store.log_access(
                 user_id=user_id,
@@ -154,12 +192,11 @@ async def get_patient_record(
             action="GET_PATIENT",
             status=AccessStatus.GRANTED,
         )
+        metrics.ACCESS_REQUESTS_TOTAL.labels(
+            role=role.value, status="granted", action="GET_PATIENT", is_break_glass="False"
+        ).inc()
     except AuditStoreUnavailableException:
-        # FAIL-OPEN for clinical personnel (Doctors/Nurses) with degraded buffer
         if role in [Role.DOCTOR, Role.NURSE]:
-            logger.warning(
-                f"AUDIT STORE OUTAGE - FAIL-OPEN CLINICAL READ: User {user_id}"
-            )
             audit_store.log_access(
                 user_id=user_id,
                 role=role,
@@ -168,9 +205,14 @@ async def get_patient_record(
                 status=AccessStatus.GRANTED,
                 degraded_mode=True,
             )
+            metrics.ACCESS_REQUESTS_TOTAL.labels(
+                role=role.value, status="degraded_granted", action="GET_PATIENT", is_break_glass="False"
+            ).inc()
             response.headers["X-System-Degraded"] = "true"
         else:
-            # FAIL-CLOSED for non-clinical roles (e.g. billing) during logging outages
+            metrics.ACCESS_REQUESTS_TOTAL.labels(
+                role=role.value, status="503_degraded_blocked", action="GET_PATIENT", is_break_glass="False"
+            ).inc()
             raise HTTPException(
                 status_code=status.HTTP_503_SERVICE_UNAVAILABLE,
                 detail="Service degraded: Non-clinical patient record access is unavailable while audit store is offline.",
@@ -190,10 +232,10 @@ async def get_patient_record(
     if role in [Role.DOCTOR, Role.BILLING]:
         filtered_record["billing"] = raw_patient["billing"]
 
+    update_gauge_metrics()
     return filtered_record
 
 
-# System Administration & Outage Simulation Endpoints
 @app.post("/system/simulate-outage")
 async def simulate_outage(
     current_user: Annotated[tuple[str, Role], Depends(get_current_user)],
@@ -202,6 +244,7 @@ async def simulate_outage(
     if role != Role.ADMIN:
         raise HTTPException(status_code=403, detail="Admin access required.")
     audit_store.is_healthy = False
+    update_gauge_metrics()
     return {"status": "outage_simulated", "audit_store_healthy": False}
 
 
@@ -213,6 +256,7 @@ async def recover_system(
     if role != Role.ADMIN:
         raise HTTPException(status_code=403, detail="Admin access required.")
     flushed = audit_store.recover_and_flush()
+    update_gauge_metrics()
     return {
         "status": "recovered",
         "audit_store_healthy": True,
