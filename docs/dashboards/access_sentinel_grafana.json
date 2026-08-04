@@ -1,0 +1,98 @@
+{
+  "annotations": { "list": [] },
+  "editable": true,
+  "fiscalYearStartMonth": 0,
+  "graphTooltip": 1,
+  "id": null,
+  "links": [],
+  "liveNow": false,
+  "panels": [
+    {
+      "title": "Audit Store Health Status",
+      "type": "stat",
+      "gridPos": { "h": 4, "w": 6, "x": 0, "y": 0 },
+      "targets": [
+        {
+          "expr": "access_sentinel_audit_store_healthy",
+          "legendFormat": "Health State",
+          "refId": "A"
+        }
+      ],
+      "fieldConfig": {
+        "defaults": {
+          "mappings": [
+            { "type": "value", "options": { "1": { "text": "ONLINE", "color": "green" }, "0": { "text": "DEGRADED / OUTAGE", "color": "red" } } }
+          ]
+        }
+      }
+    },
+    {
+      "title": "Emergency Break-Glass Invocations (ANOMALY SPIKE)",
+      "type": "stat",
+      "gridPos": { "h": 4, "w": 6, "x": 6, "y": 0 },
+      "targets": [
+        {
+          "expr": "sum(increase(access_sentinel_break_glass_total[5m]))",
+          "legendFormat": "Break-Glass Count",
+          "refId": "A"
+        }
+      ],
+      "fieldConfig": {
+        "defaults": {
+          "color": { "mode": "thresholds" },
+          "thresholds": {
+            "mode": "absolute",
+            "steps": [
+              { "color": "green", "value": null },
+              { "color": "yellow", "value": 1 },
+              { "color": "red", "value": 3 }
+            ]
+          }
+        }
+      }
+    },
+    {
+      "title": "Buffered Degraded Audit Logs",
+      "type": "stat",
+      "gridPos": { "h": 4, "w": 6, "x": 12, "y": 0 },
+      "targets": [
+        {
+          "expr": "access_sentinel_buffered_degraded_logs",
+          "legendFormat": "Buffered Entries",
+          "refId": "A"
+        }
+      ]
+    },
+    {
+      "title": "Access Request Volume by Role & Status",
+      "type": "timeseries",
+      "gridPos": { "h": 8, "w": 12, "x": 0, "y": 4 },
+      "targets": [
+        {
+          "expr": "sum by (role, status) (rate(access_sentinel_requests_total[1m]))",
+          "legendFormat": "{{role}} ({{status}})",
+          "refId": "A"
+        }
+      ]
+    },
+    {
+      "title": "Degraded Mode Behavior (Fail-Open vs. Fail-Closed)",
+      "type": "timeseries",
+      "gridPos": { "h": 8, "w": 12, "x": 12, "y": 4 },
+      "targets": [
+        {
+          "expr": "sum by (status) (rate(access_sentinel_requests_total{status=~\"degraded_granted|503_degraded_blocked\"}[1m]))",
+          "legendFormat": "Status: {{status}}",
+          "refId": "A"
+        }
+      ]
+    }
+  ],
+  "refresh": "5s",
+  "schemaVersion": 38,
+  "style": "dark",
+  "tags": ["healthcare", "security", "access-sentinel"],
+  "time": { "from": "now-15m", "to": "now" },
+  "title": "access-sentinel Overview",
+  "version": 1
+}
