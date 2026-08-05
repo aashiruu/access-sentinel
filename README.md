@@ -123,7 +123,7 @@ The Audit Store Health panel shows the outage window. Buffered Degraded Audit Lo
 
 <img width="948" height="464" alt="Dashboard after recovery" src="https://github.com/user-attachments/assets/ee6f60ca-9b05-44c6-a8d5-8c80f62a7814" />
 
-Audit Store Health flips back to ONLINE, and Buffered Degraded Audit Logs drops to 0 — confirming buffered entries were flushed to the audit store, not silently discarded.
+Audit Store Health flips back to ONLINE, and Buffered Degraded Audit Logs drops to 0, confirming buffered entries were flushed to the audit store, not silently discarded.
 
 Full traces and additional dashboard states are in [`docs/verification.md`](docs/verification.md).
 
