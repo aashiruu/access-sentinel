@@ -109,6 +109,26 @@ See `docs/verification.md` for full traces, including audit log tamper-rejection
 
 ---
 
+## Observability
+
+The Prometheus metrics were visualized in Grafana to confirm the degraded-mode behavior holds up over time under continuous load, not just in isolated test requests.
+
+**During a simulated audit-store outage:**
+
+<img width="951" height="464" alt="Dashboard during outage" src="https://github.com/user-attachments/assets/153fdf41-4db3-4ddd-ae99-bbe73ef86d1e" />
+
+The Audit Store Health panel shows the outage window. Buffered Degraded Audit Logs climbs steadily as clinical access events queue in memory rather than get dropped, while the Access Request Volume panel shows billing requests correctly blocked (503) while doctor/nurse requests continue under fail-open.
+
+**After recovery:**
+
+<img width="948" height="464" alt="Dashboard after recovery" src="https://github.com/user-attachments/assets/ee6f60ca-9b05-44c6-a8d5-8c80f62a7814" />
+
+Audit Store Health flips back to ONLINE, and Buffered Degraded Audit Logs drops to 0 — confirming buffered entries were flushed to the audit store, not silently discarded.
+
+Full traces and additional dashboard states are in [`docs/verification.md`](docs/verification.md).
+
+---
+
 ## Documentation
 
 - [`docs/tradeoffs.md`](docs/tradeoffs.md) — architectural design decisions and stage-by-stage trade-off analysis
