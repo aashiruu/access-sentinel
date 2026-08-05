@@ -113,4 +113,9 @@ HTTP/1.1 503 Service Unavailable
 ```bash
 k6 run tests/load/degraded_load_test.js
 ```
-
+```JSON
+checks_succeeded...: 100.00% 1051 out of 1051
+✓ doctor read succeeds under outage (200)
+✓ degraded header present for doctor
+✓ billing read blocked under outage (503)
+```
